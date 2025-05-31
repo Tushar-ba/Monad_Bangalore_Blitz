@@ -45,7 +45,8 @@ const NFTDetails = () => {
     try {
       setLoading(true);
       const response = await nftAPI.getNFTById(tokenId);
-      setNft(response.nft);
+      console.log('NFT Details API Response:', response);
+      setNft(response.data || response.nft || response);
     } catch (error) {
       console.error('Error fetching NFT details:', error);
       toast.error('Failed to fetch NFT details');
@@ -125,7 +126,8 @@ const NFTDetails = () => {
       if (result.success) {
         await nftAPI.listForSale({
           tokenId: nft.tokenId,
-          transactionHash: result.transactionHash,
+          owner: account,
+          basePrice: nft.basePrice
         });
         
         toast.success('NFT listed for sale successfully!');
@@ -149,7 +151,7 @@ const NFTDetails = () => {
       if (result.success) {
         await nftAPI.delistFromSale({
           tokenId: nft.tokenId,
-          transactionHash: result.transactionHash,
+          owner: account
         });
         
         toast.success('NFT delisted from sale successfully!');
@@ -182,6 +184,24 @@ const NFTDetails = () => {
   const shareNFT = () => {
     const url = window.location.href;
     copyToClipboard(url);
+  };
+
+  const getImageUrl = () => {
+    // Debug logging
+    console.log('NFT Details Image Debug:', {
+      tokenId: nft.tokenId,
+      imageURL: nft.imageURL,
+      convertedUrl: getIPFSUrl(nft.imageURL)
+    });
+    
+    // If imageURL already contains full URL, use it directly
+    if (nft.imageURL && nft.imageURL.startsWith('http')) {
+      return nft.imageURL;
+    }
+    
+    // Convert IPFS hash to full URL
+    const ipfsUrl = getIPFSUrl(nft.imageURL);
+    return ipfsUrl || `https://via.placeholder.com/600x600/f0f0f0/333333?text=NFT+${nft.tokenId}`;
   };
 
   if (loading) {
@@ -240,11 +260,12 @@ const NFTDetails = () => {
           <div className="space-y-4">
             <div className="relative bg-white rounded-2xl shadow-lg overflow-hidden">
               <img
-                src={getIPFSUrl(nft.imageURL) || 'https://via.placeholder.com/600x600?text=NFT'}
+                src={getImageUrl()}
                 alt={nft.name}
                 className="w-full aspect-square object-cover"
                 onError={(e) => {
-                  e.target.src = 'https://via.placeholder.com/600x600?text=NFT';
+                  console.log('NFT Details image load error for NFT', nft.tokenId, 'URL:', e.target.src);
+                  e.target.src = `https://via.placeholder.com/600x600/f0f0f0/333333?text=NFT+${nft.tokenId}`;
                 }}
               />
               

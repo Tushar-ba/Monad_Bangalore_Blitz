@@ -63,10 +63,11 @@ const NFTCard = ({ nft, onUpdate, showManageOptions = false }) => {
       const result = await listNFTForSale(nft.tokenId);
       
       if (result.success) {
-        // Update backend
+        // Update backend - ensure we pass the required fields
         await nftAPI.listForSale({
           tokenId: nft.tokenId,
-          transactionHash: result.transactionHash,
+          owner: account, // Required by validation schema
+          basePrice: nft.basePrice // Include current base price
         });
         
         toast.success('NFT listed for sale successfully!');
@@ -92,10 +93,10 @@ const NFTCard = ({ nft, onUpdate, showManageOptions = false }) => {
       const result = await delistNFTFromSale(nft.tokenId);
       
       if (result.success) {
-        // Update backend
+        // Update backend - ensure we pass the required fields
         await nftAPI.delistFromSale({
           tokenId: nft.tokenId,
-          transactionHash: result.transactionHash,
+          owner: account // Required by validation schema
         });
         
         toast.success('NFT delisted from sale successfully!');
@@ -164,6 +165,17 @@ const NFTCard = ({ nft, onUpdate, showManageOptions = false }) => {
     return Math.max(nft.basePrice, nft.basePrice + priceAdjustment);
   };
 
+  const getImageUrl = () => {
+    // If imageURL already contains full URL, use it directly
+    if (nft.imageURL && (nft.imageURL.startsWith('http://') || nft.imageURL.startsWith('https://'))) {
+      return nft.imageURL;
+    }
+    
+    // Convert IPFS hash to full URL
+    const ipfsUrl = getIPFSUrl(nft.imageURL);
+    return ipfsUrl || `https://via.placeholder.com/400x300?text=NFT+${nft.tokenId}`;
+  };
+
   const isOwner = account && nft.owner && account.toLowerCase() === nft.owner.toLowerCase();
 
   return (
@@ -172,11 +184,12 @@ const NFTCard = ({ nft, onUpdate, showManageOptions = false }) => {
       <div className="relative">
         <Link to={`/nft/${nft.tokenId}`}>
           <img
-            src={getIPFSUrl(nft.imageURL) || 'https://via.placeholder.com/400x300?text=NFT'}
+            src={getImageUrl()}
             alt={nft.name}
             className="w-full h-48 object-cover cursor-pointer hover:scale-105 transition-transform duration-300"
             onError={(e) => {
-              e.target.src = 'https://via.placeholder.com/400x300?text=NFT';
+              console.log('Image load error for NFT', nft.tokenId, 'URL:', e.target.src);
+              e.target.src = `https://via.placeholder.com/400x300/f0f0f0/333333?text=NFT+${nft.tokenId}`;
             }}
           />
         </Link>

@@ -107,10 +107,26 @@ export const healthAPI = {
 
 // Error handling interceptor
 api.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    console.log('🔄 API Response:', {
+      url: response.config.url,
+      status: response.status,
+      data: response.data
+    });
+    return response;
+  },
   (error) => {
+    console.error('💥 API Error Details:', {
+      url: error.config?.url,
+      method: error.config?.method,
+      status: error.response?.status,
+      statusText: error.response?.statusText,
+      data: error.response?.data,
+      message: error.message
+    });
+    
     const message = error.response?.data?.error || error.message || 'An error occurred';
-    console.error('API Error:', message);
+    console.error('❌ Final Error Message:', message);
     throw new Error(message);
   }
 );

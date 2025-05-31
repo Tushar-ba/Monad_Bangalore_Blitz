@@ -52,7 +52,7 @@ const schemas = {
     owner: Joi.string().custom(customValidations.ethereumAddress).required(),
     basePrice: Joi.number().custom(customValidations.positiveNumber).required(),
     isPR: Joi.boolean().optional().default(false),
-    prDurationHours: Joi.number().min(1).max(168).when('isPR', {
+    prDurationHours: Joi.number().min(0.01).max(8760).when('isPR', {
       is: true,
       then: Joi.required(),
       otherwise: Joi.optional()
@@ -75,7 +75,7 @@ const schemas = {
     owner: Joi.string().custom(customValidations.ethereumAddress).required(),
     basePrice: Joi.number().custom(customValidations.positiveNumber).optional(),
     isPR: Joi.boolean().optional().default(false),
-    prDurationHours: Joi.number().min(1).max(168).when('isPR', {
+    prDurationHours: Joi.number().min(0.01).max(8760).when('isPR', {
       is: true,
       then: Joi.required(),
       otherwise: Joi.optional()
@@ -122,7 +122,7 @@ const schemas = {
     isPR: Joi.boolean().optional(),
     page: Joi.number().integer().min(1).optional().default(1),
     limit: Joi.number().integer().min(1).max(100).optional().default(20),
-    sortBy: Joi.string().valid('createdAt', 'basePrice', 'likes', 'dislikes', 'tokenId', 'finalizedAt').optional().default('createdAt'),
+    sortBy: Joi.string().valid('createdAt', 'mintedAt', 'basePrice', 'likes', 'dislikes', 'tokenId', 'finalizedAt').optional().default('createdAt'),
     sortOrder: Joi.string().valid('asc', 'desc').optional().default('desc'),
     search: Joi.string().max(100).optional()
   }),

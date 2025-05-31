@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { useWallet } from '../contexts/WalletContext';
 import { nftAPI } from '../utils/api';
@@ -15,6 +15,9 @@ const Home = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [activeFilter, setActiveFilter] = useState('all');
   const [sortBy, setSortBy] = useState('newest');
+  
+  // Ref to prevent rapid successive calls
+  const lastFetchTime = useRef(0);
   
   const filters = [
     { key: 'all', label: 'All NFTs', icon: '🎨' },
@@ -33,20 +36,99 @@ const Home = () => {
     { key: 'name_desc', label: 'Name: Z to A' }
   ];
 
-  useEffect(() => {
-    fetchNFTs();
-    fetchStats();
+  const fetchNFTs = useCallback(async (force = false) => {
+    const now = Date.now();
+    // Only prevent rapid calls, not initial load
+    if (!force && now - lastFetchTime.current < 2000) {
+      console.log('⏰ Skipping fetch - too soon after last call');
+      return;
+    }
+    lastFetchTime.current = now;
+
+    try {
+      setLoading(true);
+      console.log('🔄 Fetching NFTs from API...');
+      
+      const response = await nftAPI.getAllNFTs({
+        page: 1,
+        limit: 50,
+        sortBy: 'mintedAt',
+        sortOrder: 'desc'
+      });
+      
+      console.log('✅ Raw API Response:', response);
+      console.log('📦 NFTs Data:', response.data);
+      console.log('🔢 NFTs Count:', response.data?.nfts?.length || 0);
+      
+      if (response.success && response.data?.nfts) {
+        setNfts(response.data.nfts);
+        console.log('✅ NFTs set successfully:', response.data.nfts.length, 'items');
+      } else {
+        console.warn('⚠️ Invalid response structure:', response);
+        setNfts([]);
+      }
+    } catch (error) {
+      console.error('❌ Error fetching NFTs:');
+      console.error('Error message:', error.message);
+      console.error('Error stack:', error.stack);
+      toast.error(`Failed to fetch NFTs: ${error.message}`);
+      setNfts([]); // Set empty array on error
+    } finally {
+      setLoading(false);
+      console.log('🏁 Fetch completed, loading set to false');
+    }
   }, []);
 
+  const fetchStats = useCallback(async () => {
+    try {
+      console.log('📊 Fetching stats...');
+      const response = await nftAPI.getStats();
+      console.log('✅ Stats Response:', response);
+      setStats(response.data || response.stats);
+    } catch (error) {
+      console.error('❌ Error fetching stats:', error);
+    }
+  }, []);
+
+  // Initial fetch - run immediately on mount
+  useEffect(() => {
+    console.log('🚀 Home component mounted, starting initial fetch...');
+    console.log('🔗 API Base URL:', 'http://localhost:5000');
+    
+    // Test API connectivity first
+    const testAPI = async () => {
+      try {
+        console.log('🩺 Testing API connectivity...');
+        const healthResponse = await fetch('http://localhost:5000/health');
+        console.log('💗 Health check response:', healthResponse.status);
+        
+        if (healthResponse.ok) {
+          console.log('✅ Backend is responding, proceeding with NFT fetch');
+          await fetchNFTs(true); // Force initial fetch
+          await fetchStats();
+        } else {
+          console.error('❌ Backend health check failed');
+          toast.error('Backend server is not responding');
+        }
+      } catch (error) {
+        console.error('💥 Backend connectivity error:', error);
+        toast.error('Cannot connect to backend server. Please ensure it is running.');
+      }
+    };
+    
+    testAPI();
+  }, [fetchNFTs, fetchStats]);
+
+  // Filter and sort when dependencies change
   useEffect(() => {
     filterAndSortNFTs();
   }, [nfts, searchTerm, activeFilter, sortBy]);
 
-  // Listen for NFT minting events to refresh the list
+  // Listen for NFT minting events
   useEffect(() => {
     const handleNFTMinted = (event) => {
-      console.log('🔄 NFT minted, refreshing list...', event.detail);
-      fetchNFTs();
+      console.log('🔔 NFT minted event:', event.detail);
+      fetchNFTs(true); // Force refresh on mint
       fetchStats();
     };
 
@@ -55,35 +137,7 @@ const Home = () => {
     return () => {
       window.removeEventListener('nftMinted', handleNFTMinted);
     };
-  }, []);
-
-  const fetchNFTs = async () => {
-    try {
-      setLoading(true);
-      const response = await nftAPI.getAllNFTs({
-        page: 1,
-        limit: 50,
-        sortBy: 'mintedAt',
-        sortOrder: 'desc'
-      });
-      console.log('📦 Fetched NFTs:', response);
-      setNfts(response.data?.nfts || []);
-    } catch (error) {
-      console.error('Error fetching NFTs:', error);
-      toast.error('Failed to fetch NFTs');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const fetchStats = async () => {
-    try {
-      const response = await nftAPI.getStats();
-      setStats(response.stats);
-    } catch (error) {
-      console.error('Error fetching stats:', error);
-    }
-  };
+  }, [fetchNFTs, fetchStats]);
 
   const filterAndSortNFTs = () => {
     let filtered = [...nfts];
@@ -141,10 +195,10 @@ const Home = () => {
     setFilteredNfts(filtered);
   };
 
-  const handleNFTUpdate = () => {
+  const handleNFTUpdate = useCallback(() => {
     fetchNFTs();
     fetchStats();
-  };
+  }, [fetchNFTs, fetchStats]);
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -305,9 +359,12 @@ const Home = () => {
 
         {/* NFT Grid */}
         {loading ? (
-          <div className="flex justify-center items-center py-12">
-            <Loader2 className="animate-spin" size={32} />
-            <span className="ml-2 text-gray-600">Loading NFTs...</span>
+          <div className="flex flex-col justify-center items-center py-12">
+            <Loader2 className="animate-spin mb-4" size={32} />
+            <span className="text-gray-600">Loading NFTs...</span>
+            <div className="mt-2 text-sm text-gray-500">
+              Please ensure the backend server is running on port 5000
+            </div>
           </div>
         ) : filteredNfts.length === 0 ? (
           <div className="text-center py-12">

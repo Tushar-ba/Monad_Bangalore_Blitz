@@ -35,11 +35,16 @@ export const uploadToIPFS = async (imageFile, metadata) => {
 
 /**
  * Get IPFS URL from hash
- * @param {string} hash - IPFS hash
+ * @param {string} hash - IPFS hash or URL
  * @returns {string} Full IPFS URL
  */
 export const getIPFSUrl = (hash) => {
   if (!hash) return '';
+  
+  // If it's already a full URL, return it as is
+  if (hash.startsWith('http://') || hash.startsWith('https://')) {
+    return hash;
+  }
   
   // Remove ipfs:// prefix if present
   const cleanHash = hash.replace('ipfs://', '');

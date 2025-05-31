@@ -11,6 +11,12 @@ const LikeDislike = ({ tokenId, initialLikes = 0, initialDislikes = 0, onUpdate 
   const [userAction, setUserAction] = useState(null); // 'like', 'dislike', or null
   const [isLoading, setIsLoading] = useState(false);
 
+  // Update likes and dislikes when props change
+  useEffect(() => {
+    setLikes(initialLikes);
+    setDislikes(initialDislikes);
+  }, [initialLikes, initialDislikes]);
+
   // Check if user has already voted (stored in localStorage)
   useEffect(() => {
     if (account) {
@@ -38,7 +44,9 @@ const LikeDislike = ({ tokenId, initialLikes = 0, initialDislikes = 0, onUpdate 
 
     setIsLoading(true);
     try {
-      await nftAPI.likeNFT(tokenId);
+      console.log('👍 Attempting to like NFT:', tokenId);
+      const response = await nftAPI.likeNFT(tokenId);
+      console.log('👍 Like response:', response);
       
       // Update local state
       setLikes(prev => prev + 1);
@@ -50,8 +58,9 @@ const LikeDislike = ({ tokenId, initialLikes = 0, initialDislikes = 0, onUpdate 
       
       toast.success('NFT liked! 💖');
       
+      // Call the parent update function to refresh data (with timeout to prevent loops)
       if (onUpdate) {
-        onUpdate(likes + 1, dislikes);
+        setTimeout(() => onUpdate(), 500);
       }
     } catch (error) {
       console.error('Error liking NFT:', error);
@@ -79,7 +88,9 @@ const LikeDislike = ({ tokenId, initialLikes = 0, initialDislikes = 0, onUpdate 
 
     setIsLoading(true);
     try {
-      await nftAPI.dislikeNFT(tokenId);
+      console.log('👎 Attempting to dislike NFT:', tokenId);
+      const response = await nftAPI.dislikeNFT(tokenId);
+      console.log('👎 Dislike response:', response);
       
       // Update local state
       setDislikes(prev => prev + 1);
@@ -91,8 +102,9 @@ const LikeDislike = ({ tokenId, initialLikes = 0, initialDislikes = 0, onUpdate 
       
       toast.success('NFT disliked! 💔');
       
+      // Call the parent update function to refresh data (with timeout to prevent loops)
       if (onUpdate) {
-        onUpdate(likes, dislikes + 1);
+        setTimeout(() => onUpdate(), 500);
       }
     } catch (error) {
       console.error('Error disliking NFT:', error);

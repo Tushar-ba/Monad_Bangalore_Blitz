@@ -21,6 +21,8 @@ const MintNFT = () => {
     rentalDuration: 24,
     isPR: false,
     prDurationHours: 24,
+    customPRDuration: '', // For custom duration input
+    prDurationType: 'preset' // 'preset' or 'custom'
   });
   
   const [imageFile, setImageFile] = useState(null);
@@ -77,9 +79,25 @@ const MintNFT = () => {
       return;
     }
 
+    // Allow very small values (down to 0.0000001)
+    const basePriceNum = parseFloat(formData.basePrice);
+    if (isNaN(basePriceNum) || basePriceNum < 0.0000001) {
+      toast.error('Base price must be at least 0.0000001 MON');
+      return;
+    }
+
     if (formData.isForRent && (!formData.rentalFee || parseFloat(formData.rentalFee) <= 0)) {
       toast.error('Please enter a valid rental fee');
       return;
+    }
+
+    // Validate PR duration
+    if (formData.isPR && formData.prDurationType === 'custom') {
+      const customDuration = parseFloat(formData.customPRDuration);
+      if (isNaN(customDuration) || customDuration < 60) {
+        toast.error('Custom PR duration must be at least 60 seconds');
+        return;
+      }
     }
 
     setIsUploading(true);
@@ -139,7 +157,14 @@ const MintNFT = () => {
 
       // Add PR data if applicable
       if (formData.isPR) {
-        dbData.prDurationHours = parseInt(formData.prDurationHours);
+        let durationInHours;
+        if (formData.prDurationType === 'custom') {
+          // Convert seconds to hours for database
+          durationInHours = parseFloat(formData.customPRDuration) / 3600;
+        } else {
+          durationInHours = parseInt(formData.prDurationHours);
+        }
+        dbData.prDurationHours = durationInHours;
       }
 
       await nftAPI.mintNFT(dbData);
@@ -153,6 +178,12 @@ const MintNFT = () => {
           // Call listForRent on contract if rent is enabled
           if (formData.isForRent) {
             console.log('📝 Listing NFT for rent on contract...');
+            console.log('Rent Details:', {
+              tokenId: mintResult.tokenId,
+              rentalFee: formData.rentalFee,
+              rentalDuration: formData.rentalDuration
+            });
+            
             const { listNFTForRent } = await import('../utils/wallet');
             await listNFTForRent(
               parseInt(mintResult.tokenId),
@@ -164,10 +195,38 @@ const MintNFT = () => {
           // Call lockNFT on contract if PR is enabled
           if (formData.isPR) {
             console.log('📝 Locking NFT for PR on contract...');
+            console.log('PR Duration Debug:', {
+              prDurationType: formData.prDurationType,
+              prDurationHours: formData.prDurationHours,
+              customPRDuration: formData.customPRDuration
+            });
+            
             const { lockNFT } = await import('../utils/wallet');
+            
+            let durationInDays;
+            if (formData.prDurationType === 'custom') {
+              // Convert seconds to days
+              durationInDays = Math.ceil(parseFloat(formData.customPRDuration) / (24 * 60 * 60));
+              console.log('🔧 Custom duration calculation:', {
+                seconds: formData.customPRDuration,
+                days: durationInDays
+              });
+            } else {
+              // Convert hours to days
+              durationInDays = Math.ceil(parseInt(formData.prDurationHours) / 24);
+              console.log('🔧 Preset duration calculation:', {
+                hours: formData.prDurationHours,
+                days: durationInDays
+              });
+            }
+            
+            // Ensure minimum 1 day
+            durationInDays = Math.max(1, durationInDays);
+            console.log('🔒 Final duration for lockNFT:', durationInDays, 'days');
+            
             await lockNFT(
               parseInt(mintResult.tokenId),
-              Math.ceil(formData.prDurationHours / 24) // Convert hours to days
+              durationInDays
             );
             console.log('✅ NFT locked for PR on contract');
           }
@@ -210,6 +269,8 @@ const MintNFT = () => {
       rentalDuration: 24,
       isPR: false,
       prDurationHours: 24,
+      customPRDuration: '',
+      prDurationType: 'preset'
     });
     setImageFile(null);
     setImagePreview(null);
@@ -327,15 +388,15 @@ const MintNFT = () => {
                       name="basePrice"
                       value={formData.basePrice}
                       onChange={handleInputChange}
-                      placeholder="0.0"
-                      step="0.0001"
-                      min="0"
+                      placeholder="0.0000001"
+                      step="0.0000001"
+                      min="0.0000001"
                       className="w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                       required
                     />
                   </div>
                   <p className="mt-1 text-xs text-gray-500">
-                    Your NFT will be automatically listed for sale at this price
+                    Minimum: 0.0000001 MON. Your NFT will be automatically listed for sale at this price.
                   </p>
                 </div>
               </div>
@@ -372,8 +433,8 @@ const MintNFT = () => {
                         value={formData.rentalFee}
                         onChange={handleInputChange}
                         placeholder="Rental fee per day (MON)"
-                        step="0.0001"
-                        min="0"
+                        step="0.0000001"
+                        min="0.0000001"
                         className="w-full px-2 py-1 text-sm border border-gray-300 rounded"
                         required={formData.isForRent}
                       />
@@ -411,18 +472,90 @@ const MintNFT = () => {
                   </p>
                   
                   {formData.isPR && (
-                    <div className="mt-3">
-                      <select
-                        name="prDurationHours"
-                        value={formData.prDurationHours}
-                        onChange={handleInputChange}
-                        className="w-full px-2 py-1 text-sm border border-gray-300 rounded"
-                      >
-                        <option value={24}>24 hours</option>
-                        <option value={48}>48 hours</option>
-                        <option value={72}>72 hours</option>
-                        <option value={168}>1 week</option>
-                      </select>
+                    <div className="mt-3 space-y-3">
+                      <div>
+                        <label className="block text-xs font-medium text-gray-700 mb-1">
+                          Duration Type
+                        </label>
+                        <div className="flex gap-2">
+                          <label className="flex items-center">
+                            <input
+                              type="radio"
+                              name="prDurationType"
+                              value="preset"
+                              checked={formData.prDurationType === 'preset'}
+                              onChange={handleInputChange}
+                              className="mr-1"
+                            />
+                            <span className="text-xs">Preset</span>
+                          </label>
+                          <label className="flex items-center">
+                            <input
+                              type="radio"
+                              name="prDurationType"
+                              value="custom"
+                              checked={formData.prDurationType === 'custom'}
+                              onChange={handleInputChange}
+                              className="mr-1"
+                            />
+                            <span className="text-xs">Custom (seconds)</span>
+                          </label>
+                        </div>
+                      </div>
+                      
+                      {formData.prDurationType === 'preset' ? (
+                        <select
+                          name="prDurationHours"
+                          value={formData.prDurationHours}
+                          onChange={handleInputChange}
+                          className="w-full px-2 py-1 text-sm border border-gray-300 rounded"
+                        >
+                          <option value={24}>24 hours</option>
+                          <option value={48}>48 hours</option>
+                          <option value={72}>72 hours</option>
+                          <option value={168}>1 week</option>
+                        </select>
+                      ) : (
+                        <div className="space-y-2">
+                          <input
+                            type="number"
+                            name="customPRDuration"
+                            value={formData.customPRDuration}
+                            onChange={handleInputChange}
+                            placeholder="Duration in seconds (min: 60)"
+                            min="60"
+                            step="1"
+                            className="w-full px-2 py-1 text-sm border border-gray-300 rounded"
+                            required={formData.isPR && formData.prDurationType === 'custom'}
+                          />
+                          <div className="text-xs text-gray-500 space-y-1">
+                            <div>Quick presets:</div>
+                            <div className="flex flex-wrap gap-1">
+                              <button
+                                type="button"
+                                onClick={() => setFormData(prev => ({...prev, customPRDuration: '3600'}))}
+                                className="px-2 py-1 bg-gray-100 hover:bg-gray-200 rounded text-xs"
+                              >
+                                1h (3600s)
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setFormData(prev => ({...prev, customPRDuration: '86400'}))}
+                                className="px-2 py-1 bg-gray-100 hover:bg-gray-200 rounded text-xs"
+                              >
+                                1d (86400s)
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setFormData(prev => ({...prev, customPRDuration: '604800'}))}
+                                className="px-2 py-1 bg-gray-100 hover:bg-gray-200 rounded text-xs"
+                              >
+                                1w (604800s)
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
