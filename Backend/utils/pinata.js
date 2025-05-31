@@ -34,7 +34,7 @@ class PinataService {
       }
 
       const result = await this.pinata.testAuthentication();
-      console.log('✅ Pinata connection test:', result);
+      console.log('📌 Pinata connection test:', result);
       return result;
     } catch (error) {
       console.error('❌ Pinata connection test failed:', error);
@@ -48,6 +48,12 @@ class PinataService {
       if (!this.pinata) {
         throw new Error('Pinata not initialized');
       }
+
+      // Create a readable stream from buffer for Pinata SDK v2+
+      const Readable = require('stream').Readable;
+      const readableStream = new Readable();
+      readableStream.push(fileBuffer);
+      readableStream.push(null); // Signal end of stream
 
       const defaultOptions = {
         pinataMetadata: {
@@ -64,7 +70,7 @@ class PinataService {
 
       const uploadOptions = { ...defaultOptions, ...options };
 
-      const result = await this.pinata.pinFileToIPFS(fileBuffer, uploadOptions);
+      const result = await this.pinata.pinFileToIPFS(readableStream, uploadOptions);
       
       const ipfsUrl = `https://gateway.pinata.cloud/ipfs/${result.IpfsHash}`;
       
