@@ -1,126 +1,346 @@
-const {
-  time,
-  loadFixture,
-} = require("@nomicfoundation/hardhat-toolbox/network-helpers");
-const { anyValue } = require("@nomicfoundation/hardhat-chai-matchers/withArgs");
 const { expect } = require("chai");
+const hre = require("hardhat");
 
-describe("Lock", function () {
-  // We define a fixture to reuse the same setup in every test.
-  // We use loadFixture to run this setup once, snapshot that state,
-  // and reset Hardhat Network to that snapshot in every test.
-  async function deployOneYearLockFixture() {
-    const ONE_YEAR_IN_SECS = 365 * 24 * 60 * 60;
-    const ONE_GWEI = 1_000_000_000;
-
-    const lockedAmount = ONE_GWEI;
-    const unlockTime = (await time.latest()) + ONE_YEAR_IN_SECS;
-
-    // Contracts are deployed using the first signer/account by default
-    const [owner, otherAccount] = await ethers.getSigners();
-
-    const Lock = await ethers.getContractFactory("Lock");
-    const lock = await Lock.deploy(unlockTime, { value: lockedAmount });
-
-    return { lock, unlockTime, lockedAmount, owner, otherAccount };
-  }
-
-  describe("Deployment", function () {
-    it("Should set the right unlockTime", async function () {
-      const { lock, unlockTime } = await loadFixture(deployOneYearLockFixture);
-
-      expect(await lock.unlockTime()).to.equal(unlockTime);
+describe("NFTMarketplace", function () {
+    let nftMarketplace;
+    let owner, addr1, addr2, addr3;
+    let basePrice, rentPrice;
+    
+    beforeEach(async function () {
+        [owner, addr1, addr2, addr3] = await hre.ethers.getSigners();
+        
+        // Define prices using ethers methods
+        basePrice = hre.ethers.parseEther("1.0"); // 1 ETH
+        rentPrice = hre.ethers.parseEther("0.1"); // 0.1 ETH per day
+        
+        const NFTMarketplace = await hre.ethers.getContractFactory("NFTMarketplace");
+        nftMarketplace = await NFTMarketplace.deploy();
+        await nftMarketplace.waitForDeployment();
     });
 
-    it("Should set the right owner", async function () {
-      const { lock, owner } = await loadFixture(deployOneYearLockFixture);
+    describe("NFT Minting", function () {
+        it("Should mint NFT with correct details and auto-list for sale", async function () {
+            const tokenURI = "https://example.com/token/1";
+            
+            await expect(nftMarketplace.mintNFT(addr1.address, tokenURI, basePrice))
+                .to.emit(nftMarketplace, "NFTMinted")
+                .withArgs(0, addr1.address, basePrice, tokenURI)
+                .and.to.emit(nftMarketplace, "NFTListed")
+                .withArgs(0, basePrice, addr1.address);
+            
+            // Check NFT details
+            const details = await nftMarketplace.getNFTDetails(0);
+            expect(details.basePrice).to.equal(basePrice);
+            expect(details.isListedForSale).to.be.true;
+            expect(details.isListedForRent).to.be.false;
+            
+            // Check ownership and URI
+            expect(await nftMarketplace.ownerOf(0)).to.equal(addr1.address);
+            expect(await nftMarketplace.tokenURI(0)).to.equal(tokenURI);
+        });
 
-      expect(await lock.owner()).to.equal(owner.address);
+        it("Should reject minting with zero base price", async function () {
+            await expect(
+                nftMarketplace.mintNFT(addr1.address, "uri", 0)
+            ).to.be.revertedWith("Base price must be greater than 0");
+        });
     });
 
-    it("Should receive and store the funds to lock", async function () {
-      const { lock, lockedAmount } = await loadFixture(
-        deployOneYearLockFixture
-      );
+    describe("Buying NFTs", function () {
+        beforeEach(async function () {
+            await nftMarketplace.mintNFT(addr1.address, "uri1", basePrice);
+        });
 
-      expect(await ethers.provider.getBalance(lock.target)).to.equal(
-        lockedAmount
-      );
+        it("Should allow buying NFT at base price", async function () {
+            const initialBalance = await hre.ethers.provider.getBalance(addr1.address);
+            
+            await expect(
+                nftMarketplace.connect(addr2).buyNFT(0, { value: basePrice })
+            )
+                .to.emit(nftMarketplace, "NFTSold")
+                .withArgs(0, addr1.address, addr2.address, basePrice);
+            
+            // Check ownership transfer
+            expect(await nftMarketplace.ownerOf(0)).to.equal(addr2.address);
+            
+            // Check payment transfer
+            const finalBalance = await hre.ethers.provider.getBalance(addr1.address);
+            expect(finalBalance - initialBalance).to.equal(basePrice);
+            
+            // Check NFT is no longer listed
+            const details = await nftMarketplace.getNFTDetails(0);
+            expect(details.isListedForSale).to.be.false;
+        });
+
+        it("Should accept overpayment without refund", async function () {
+            const overpayment = hre.ethers.parseEther("2.0");
+            const initialBalance = await hre.ethers.provider.getBalance(addr1.address);
+            
+            await nftMarketplace.connect(addr2).buyNFT(0, { value: overpayment });
+            
+            // Seller should receive full overpayment
+            const finalBalance = await hre.ethers.provider.getBalance(addr1.address);
+            expect(finalBalance - initialBalance).to.equal(overpayment);
+        });
+
+        it("Should reject purchase below base price", async function () {
+            const lowPrice = hre.ethers.parseEther("0.5");
+            await expect(
+                nftMarketplace.connect(addr2).buyNFT(0, { value: lowPrice })
+            ).to.be.revertedWith("Payment below base price");
+        });
+
+        it("Should reject self-purchase", async function () {
+            await expect(
+                nftMarketplace.connect(addr1).buyNFT(0, { value: basePrice })
+            ).to.be.revertedWith("Cannot buy your own NFT");
+        });
     });
 
-    it("Should fail if the unlockTime is not in the future", async function () {
-      // We don't use the fixture here because we want a different deployment
-      const latestTime = await time.latest();
-      const Lock = await ethers.getContractFactory("Lock");
-      await expect(Lock.deploy(latestTime, { value: 1 })).to.be.revertedWith(
-        "Unlock time should be in the future"
-      );
+    describe("Rental System", function () {
+        beforeEach(async function () {
+            await nftMarketplace.mintNFT(addr1.address, "uri1", basePrice);
+        });
+
+        it("Should list NFT for rent", async function () {
+            await expect(
+                nftMarketplace.connect(addr1).listForRent(0, rentPrice)
+            )
+                .to.emit(nftMarketplace, "NFTRentListed")
+                .withArgs(0, rentPrice, addr1.address);
+            
+            const details = await nftMarketplace.getNFTDetails(0);
+            expect(details.isListedForRent).to.be.true;
+            expect(details.rentPricePerDay).to.equal(rentPrice);
+        });
+
+        it("Should rent NFT for specified duration", async function () {
+            const duration = 7; // 7 days
+            const totalCost = rentPrice * BigInt(duration);
+            
+            await nftMarketplace.connect(addr1).listForRent(0, rentPrice);
+            
+            const initialBalance = await hre.ethers.provider.getBalance(addr1.address);
+            
+            await expect(
+                nftMarketplace.connect(addr2).rentNFT(0, duration, { value: totalCost })
+            )
+                .to.emit(nftMarketplace, "NFTRented")
+                .withArgs(0, addr2.address, addr1.address, duration, totalCost);
+            
+            // Check rental details
+            const details = await nftMarketplace.getNFTDetails(0);
+            expect(details.isCurrentlyRented).to.be.true;
+            expect(details.currentRenter).to.equal(addr2.address);
+            
+            // Check temporary user rights
+            expect(await nftMarketplace.temporaryUser(0)).to.equal(addr2.address);
+            
+            // Check payment transfer
+            const finalBalance = await hre.ethers.provider.getBalance(addr1.address);
+            expect(finalBalance - initialBalance).to.equal(totalCost);
+        });
+
+        it("Should end rental after duration expires", async function () {
+            const duration = 1; // 1 day
+            await nftMarketplace.connect(addr1).listForRent(0, rentPrice);
+            await nftMarketplace.connect(addr2).rentNFT(0, duration, { value: rentPrice });
+            
+            // Fast forward time by more than 1 day
+            await hre.ethers.provider.send("evm_increaseTime", [86400 + 1]); // 1 day + 1 second
+            await hre.ethers.provider.send("evm_mine");
+            
+            await expect(
+                nftMarketplace.checkAndEndExpiredRental(0)
+            )
+                .to.emit(nftMarketplace, "NFTRentalEnded")
+                .withArgs(0, addr2.address, addr1.address);
+            
+            // Check rental status reset
+            const details = await nftMarketplace.getNFTDetails(0);
+            expect(details.isCurrentlyRented).to.be.false;
+            expect(details.currentRenter).to.equal(hre.ethers.ZeroAddress);
+            expect(await nftMarketplace.temporaryUser(0)).to.equal(hre.ethers.ZeroAddress);
+        });
+
+        it("Should reject rental of own NFT", async function () {
+            await nftMarketplace.connect(addr1).listForRent(0, rentPrice);
+            await expect(
+                nftMarketplace.connect(addr1).rentNFT(0, 1, { value: rentPrice })
+            ).to.be.revertedWith("Cannot rent your own NFT");
+        });
+
+        it("Should reject insufficient payment for rent", async function () {
+            const duration = 7;
+            const insufficientPayment = rentPrice * BigInt(duration - 1);
+            
+            await nftMarketplace.connect(addr1).listForRent(0, rentPrice);
+            await expect(
+                nftMarketplace.connect(addr2).rentNFT(0, duration, { value: insufficientPayment })
+            ).to.be.revertedWith("Insufficient payment for rent");
+        });
     });
-  });
 
-  describe("Withdrawals", function () {
-    describe("Validations", function () {
-      it("Should revert with the right error if called too soon", async function () {
-        const { lock } = await loadFixture(deployOneYearLockFixture);
+    describe("NFT Locking System", function () {
+        beforeEach(async function () {
+            await nftMarketplace.mintNFT(addr1.address, "uri1", basePrice);
+        });
 
-        await expect(lock.withdraw()).to.be.revertedWith(
-          "You can't withdraw yet"
-        );
-      });
+        it("Should lock NFT for specified duration", async function () {
+            const lockDuration = 30; // 30 days
+            
+            await expect(
+                nftMarketplace.connect(addr1).lockNFT(0, lockDuration)
+            )
+                .to.emit(nftMarketplace, "NFTLocked");
+            
+            const details = await nftMarketplace.getNFTDetails(0);
+            expect(details.isLocked).to.be.true;
+            expect(await nftMarketplace.isLocked(0)).to.be.true;
+            
+            // Should auto-list for sale when locked
+            expect(details.isListedForSale).to.be.true;
+        });
 
-      it("Should revert with the right error if called from another account", async function () {
-        const { lock, unlockTime, otherAccount } = await loadFixture(
-          deployOneYearLockFixture
-        );
+        it("Should prevent delisting locked NFT", async function () {
+            await nftMarketplace.connect(addr1).lockNFT(0, 30);
+            
+            await expect(
+                nftMarketplace.connect(addr1).delistFromSale(0)
+            ).to.be.revertedWith("Cannot delist locked NFT");
+        });
 
-        // We can increase the time in Hardhat Network
-        await time.increaseTo(unlockTime);
+        it("Should unlock NFT after lock period expires", async function () {
+            const lockDuration = 1; // 1 day
+            await nftMarketplace.connect(addr1).lockNFT(0, lockDuration);
+            
+            // Fast forward time
+            await hre.ethers.provider.send("evm_increaseTime", [86400 + 1]);
+            await hre.ethers.provider.send("evm_mine");
+            
+            await expect(
+                nftMarketplace.connect(addr1).unlockNFT(0)
+            )
+                .to.emit(nftMarketplace, "NFTUnlocked")
+                .withArgs(0, addr1.address);
+            
+            const details = await nftMarketplace.getNFTDetails(0);
+            expect(details.isLocked).to.be.false;
+            expect(await nftMarketplace.isLocked(0)).to.be.false;
+        });
 
-        // We use lock.connect() to send a transaction from another account
-        await expect(lock.connect(otherAccount).withdraw()).to.be.revertedWith(
-          "You aren't the owner"
-        );
-      });
-
-      it("Shouldn't fail if the unlockTime has arrived and the owner calls it", async function () {
-        const { lock, unlockTime } = await loadFixture(
-          deployOneYearLockFixture
-        );
-
-        // Transactions are sent using the first signer by default
-        await time.increaseTo(unlockTime);
-
-        await expect(lock.withdraw()).not.to.be.reverted;
-      });
+        it("Should prevent unlocking before lock period expires", async function () {
+            await nftMarketplace.connect(addr1).lockNFT(0, 30);
+            
+            await expect(
+                nftMarketplace.connect(addr1).unlockNFT(0)
+            ).to.be.revertedWith("Lock period has not expired");
+        });
     });
 
-    describe("Events", function () {
-      it("Should emit an event on withdrawals", async function () {
-        const { lock, unlockTime, lockedAmount } = await loadFixture(
-          deployOneYearLockFixture
-        );
+    describe("Listing and Delisting", function () {
+        beforeEach(async function () {
+            await nftMarketplace.mintNFT(addr1.address, "uri1", basePrice);
+        });
 
-        await time.increaseTo(unlockTime);
+        it("Should allow owner to delist from sale", async function () {
+            await expect(
+                nftMarketplace.connect(addr1).delistFromSale(0)
+            )
+                .to.emit(nftMarketplace, "NFTDelisted")
+                .withArgs(0, addr1.address);
+            
+            const details = await nftMarketplace.getNFTDetails(0);
+            expect(details.isListedForSale).to.be.false;
+        });
 
-        await expect(lock.withdraw())
-          .to.emit(lock, "Withdrawal")
-          .withArgs(lockedAmount, anyValue); // We accept any value as `when` arg
-      });
+        it("Should allow owner to relist for sale", async function () {
+            await nftMarketplace.connect(addr1).delistFromSale(0);
+            
+            await expect(
+                nftMarketplace.connect(addr1).listForSale(0)
+            )
+                .to.emit(nftMarketplace, "NFTListed")
+                .withArgs(0, basePrice, addr1.address);
+        });
+
+        it("Should prevent non-owner from listing/delisting", async function () {
+            await expect(
+                nftMarketplace.connect(addr2).delistFromSale(0)
+            ).to.be.revertedWith("Only owner can delist");
+            
+            await expect(
+                nftMarketplace.connect(addr2).listForSale(0)
+            ).to.be.revertedWith("Only owner can list for sale");
+        });
     });
 
-    describe("Transfers", function () {
-      it("Should transfer the funds to the owner", async function () {
-        const { lock, unlockTime, lockedAmount, owner } = await loadFixture(
-          deployOneYearLockFixture
-        );
+    describe("View Functions", function () {
+        beforeEach(async function () {
+            await nftMarketplace.mintNFT(addr1.address, "uri1", basePrice);
+        });
 
-        await time.increaseTo(unlockTime);
+        it("Should return correct availability status", async function () {
+            expect(await nftMarketplace.isAvailableForSale(0)).to.be.true;
+            expect(await nftMarketplace.isAvailableForRent(0)).to.be.false;
+            
+            await nftMarketplace.connect(addr1).listForRent(0, rentPrice);
+            expect(await nftMarketplace.isAvailableForRent(0)).to.be.true;
+        });
 
-        await expect(lock.withdraw()).to.changeEtherBalances(
-          [owner, lock],
-          [lockedAmount, -lockedAmount]
-        );
-      });
+        it("Should return correct renter information", async function () {
+            expect(await nftMarketplace.getCurrentRenter(0)).to.equal(hre.ethers.ZeroAddress);
+            
+            await nftMarketplace.connect(addr1).listForRent(0, rentPrice);
+            await nftMarketplace.connect(addr2).rentNFT(0, 1, { value: rentPrice });
+            
+            expect(await nftMarketplace.getCurrentRenter(0)).to.equal(addr2.address);
+        });
+
+        it("Should return correct remaining times", async function () {
+            // Test lock time
+            await nftMarketplace.connect(addr1).lockNFT(0, 1);
+            const lockTime = await nftMarketplace.getRemainingLockTime(0);
+            expect(lockTime).to.be.greaterThan(0);
+            
+            // Test rental time
+            await nftMarketplace.connect(addr1).listForRent(0, rentPrice);
+            await nftMarketplace.connect(addr2).rentNFT(0, 1, { value: rentPrice });
+            const rentalTime = await nftMarketplace.getRemainingRentalTime(0);
+            expect(rentalTime).to.be.greaterThan(0);
+        });
     });
-  });
+
+    describe("Error Cases", function () {
+        it("Should reject operations on non-existent tokens", async function () {
+            await expect(
+                nftMarketplace.getNFTDetails(999)
+            ).to.be.revertedWith("Token does not exist");
+            
+            await expect(
+                nftMarketplace.buyNFT(999, { value: basePrice })
+            ).to.be.revertedWith("Token does not exist");
+        });
+
+        it("Should prevent buying rented NFT", async function () {
+            await nftMarketplace.mintNFT(addr1.address, "uri1", basePrice);
+            await nftMarketplace.connect(addr1).listForRent(0, rentPrice);
+            await nftMarketplace.connect(addr2).rentNFT(0, 1, { value: rentPrice });
+            
+            await expect(
+                nftMarketplace.connect(addr3).buyNFT(0, { value: basePrice })
+            ).to.be.revertedWith("Cannot buy rented NFT");
+        });
+
+        it("Should prevent listing rented NFT for sale", async function () {
+            await nftMarketplace.mintNFT(addr1.address, "uri1", basePrice);
+            await nftMarketplace.connect(addr1).delistFromSale(0);
+            await nftMarketplace.connect(addr1).listForRent(0, rentPrice);
+            await nftMarketplace.connect(addr2).rentNFT(0, 1, { value: rentPrice });
+            
+            await expect(
+                nftMarketplace.connect(addr1).listForSale(0)
+            ).to.be.revertedWith("Cannot list rented NFT for sale");
+        });
+    });
 });
